@@ -445,7 +445,7 @@ def main():
 
                 # Convert frame for Streamlit
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                video_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
+                video_placeholder.image(frame_rgb, channels="RGB", width="stretch")
 
                 # Update Dashboard Metrics every 2 frames for smooth UI
                 frame_count += 1
