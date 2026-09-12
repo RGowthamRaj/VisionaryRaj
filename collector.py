@@ -3,8 +3,9 @@ Hand Gesture Data Collector
 ===========================
 Uses OpenCV and MediaPipe to detect hand landmarks and collect training data.
 - Switch between 4 classes (0, 1, 2, 3) using keys '1', '2', '3', and '4'.
-- Press 's' to save the current 21 raw landmarks (x, y, z) to gesture_data.csv.
-- Displays active class, sample counts, and detection status on screen.
+- Press 's' to save a single sample (21 raw coordinates x, y, z).
+- Press 'r' to toggle Continuous Auto-Record (collects smoothly while moving hand).
+- Displays active class, target progress (e.g. 150/200), and detection status on screen.
 """
 
 import argparse
@@ -143,7 +144,7 @@ def init_csv_file(csv_path):
     file_exists = os.path.isfile(csv_path)
 
     if not file_exists:
-        # Build header: label, x0, y0, z0, ..., x20, y20, z20
+        # Build header: class, x0, y0, z0, ..., x20, y20, z20
         header = ["class"]
         for i in range(21):
             header.extend([f"x{i}", f"y{i}", f"z{i}"])
@@ -164,7 +165,7 @@ def init_csv_file(csv_path):
                             counts[cls_val] = counts.get(cls_val, 0) + 1
                         except ValueError:
                             pass
-            print(f"[INFO] Found existing data: {counts}")
+            print(f"[INFO] Loaded existing data from {csv_path}: {counts}")
         except Exception as e:
             print(f"[WARNING] Could not parse existing CSV: {e}")
 
@@ -186,66 +187,94 @@ def save_landmarks(csv_path, class_label, landmarks):
         writer.writerow(row)
 
 
-def draw_hud(frame, active_class, sample_counts, hand_detected, status_msg, status_color):
+def draw_hud(frame, active_class, sample_counts, target_per_class, hand_detected, is_recording, status_msg, status_color, csv_name):
     """Draws a clean, informative overlay HUD on the frame."""
     h, w, _ = frame.shape
 
     # Semi-transparent top banner
     overlay = frame.copy()
-    cv2.rectangle(overlay, (0, 0), (w, 110), (20, 20, 25), -1)
+    cv2.rectangle(overlay, (0, 0), (w, 115), (20, 20, 25), -1)
     # Semi-transparent bottom banner
     cv2.rectangle(overlay, (0, h - 45), (w, h), (20, 20, 25), -1)
-    cv2.addWeighted(overlay, 0.65, frame, 0.35, 0, frame)
+    cv2.addWeighted(overlay, 0.70, frame, 0.30, 0, frame)
 
-    # Title
-    cv2.putText(frame, "HAND GESTURE DATA COLLECTOR", (15, 25),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
+    # Title & Target info
+    cv2.putText(frame, f"DATA COLLECTOR -> {csv_name}", (15, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.62, (255, 255, 255), 2, cv2.LINE_AA)
+
+    # Recording badge
+    if is_recording:
+        # Pulsing red REC indicator
+        cv2.circle(frame, (w - 280, 20), 8, (0, 0, 255), -1, cv2.LINE_AA)
+        cv2.putText(frame, "AUTO-REC ON (Press 'r' to stop)", (w - 265, 25),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.50, (50, 80, 255), 2, cv2.LINE_AA)
 
     # Active Class indicator with colored box
-    cv2.putText(frame, "Active Class:", (15, 60),
+    cv2.putText(frame, "Active Class:", (15, 62),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
     class_str = f"CLASS {active_class}"
     class_color = (0, 255, 200)
-    cv2.putText(frame, class_str, (140, 60),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, class_color, 2, cv2.LINE_AA)
+    cv2.putText(frame, class_str, (135, 62),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.72, class_color, 2, cv2.LINE_AA)
 
     # Total samples
     total_samples = sum(sample_counts.values())
-    cv2.putText(frame, f"Total Samples: {total_samples}", (15, 92),
+    total_target = target_per_class * 4 if target_per_class > 0 else 0
+    total_str = f"Total: {total_samples}" + (f" / {total_target}" if total_target > 0 else "")
+    cv2.putText(frame, total_str, (15, 96),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (230, 230, 230), 1, cv2.LINE_AA)
 
-    # Per-class counts breakdown
-    col_x = 280
+    # Per-class counts breakdown with completion highlight
+    col_x = 270
     for c in range(4):
         is_active = (c == active_class)
-        tag_color = (0, 255, 200) if is_active else (180, 180, 180)
-        thick = 2 if is_active else 1
-        text = f"C{c}: {sample_counts.get(c, 0)}"
-        cv2.putText(frame, text, (col_x + c * 85, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, tag_color, thick, cv2.LINE_AA)
+        c_count = sample_counts.get(c, 0)
+        c_done = (target_per_class > 0 and c_count >= target_per_class)
+
+        if c_done:
+            tag_color = (0, 255, 100) # Bright green done
+            thick = 2
+            mark = " [OK]"
+        elif is_active:
+            tag_color = (0, 255, 255) # Cyan active
+            thick = 2
+            mark = ""
+        else:
+            tag_color = (175, 175, 175)
+            thick = 1
+            mark = ""
+
+        if target_per_class > 0:
+            text = f"C{c}: {c_count}/{target_per_class}{mark}"
+        else:
+            text = f"C{c}: {c_count}"
+
+        cv2.putText(frame, text, (col_x + c * 115, 62),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.50, tag_color, thick, cv2.LINE_AA)
 
     # Hand detection status indicator
     status_text = "Hand Detected" if hand_detected else "No Hand"
     dot_color = (0, 255, 100) if hand_detected else (0, 60, 255)
-    cv2.circle(frame, (w - 145, 22), 7, dot_color, -1, cv2.LINE_AA)
-    cv2.putText(frame, status_text, (w - 130, 27),
+    cv2.circle(frame, (w - 145, 95), 7, dot_color, -1, cv2.LINE_AA)
+    cv2.putText(frame, status_text, (w - 130, 100),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (230, 230, 230), 1, cv2.LINE_AA)
 
     # Bottom helper bar
-    help_text = "[1-4]: Switch Class  |  [S]: Save  |  [Q / ESC]: Quit"
-    cv2.putText(frame, help_text, (15, h - 17),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.48, (180, 180, 180), 1, cv2.LINE_AA)
+    help_text = "[1-4]: Class  |  [S]: Save 1  |  [R]: Auto-Record  |  [Q/ESC]: Quit"
+    cv2.putText(frame, help_text, (15, h - 16),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.48, (190, 190, 190), 1, cv2.LINE_AA)
 
     # Temporary action notification message
     if status_msg:
-        cv2.putText(frame, status_msg, (w - 380, h - 17),
+        cv2.putText(frame, status_msg, (w - 420, h - 16),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.52, status_color, 2, cv2.LINE_AA)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Collect hand gesture landmarks dataset.")
     parser.add_argument("--camera", type=int, default=0, help="Webcam device index (default: 0)")
-    parser.add_argument("--csv", type=str, default="gesture_data.csv", help="Target CSV file (default: gesture_data.csv)")
+    parser.add_argument("--csv", type=str, default="train_data.csv", help="Target CSV file (default: train_data.csv)")
+    parser.add_argument("--target", type=int, default=200, help="Target samples per class (default: 200)")
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL_PATH, help="Path to hand_landmarker.task model")
     args = parser.parse_args()
 
@@ -264,22 +293,27 @@ def main():
         print("[HINT] If you have another camera, try passing --camera 1")
         sys.exit(1)
 
-    # Set camera resolution (optional preferred 1280x720 or default)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
     active_class = 0
-    status_message = "Ready. Press 's' to collect."
+    is_recording = False
+    last_auto_save_time = 0
+    auto_save_interval = 0.08  # Save every 80ms (~12 samples/sec) in auto-record mode
+
+    status_message = "Ready. Press 's' (single) or 'r' (auto-record)."
     status_color = (0, 255, 200)
     status_timestamp = time.time()
 
-    print("\n" + "=" * 55)
-    print(" HAND GESTURE COLLECTOR READY")
-    print("=" * 55)
+    print("\n" + "=" * 60)
+    print(f" HAND GESTURE COLLECTOR -> {args.csv}")
+    print(f" Target per class: {args.target} samples (Total: {args.target * 4})")
+    print("=" * 60)
     print(" - Keys '1', '2', '3', '4' -> Switch to Class 0, 1, 2, 3")
-    print(" - Key 's'                 -> Save current 21 raw landmarks")
-    print(" - Key 'q' or ESC          -> Quit")
-    print("=" * 55 + "\n")
+    print(" - Key 's'                 -> Save single sample")
+    print(" - Key 'r'                 -> Toggle Continuous Auto-Record (move hand!)")
+    print(" - Key 'q' or ESC          -> Quit and save")
+    print("=" * 60 + "\n")
 
     try:
         while True:
@@ -300,12 +334,45 @@ def main():
             if hand_detected:
                 draw_hand_landmarks(frame, landmarks)
 
-            # Handle status message timeout (clear after 2.0s)
+            # Auto-record logic
             current_time = time.time()
-            displayed_msg = status_message if (current_time - status_timestamp < 2.0) else ""
+            if is_recording:
+                # Check if current class target reached
+                if args.target > 0 and sample_counts.get(active_class, 0) >= args.target:
+                    is_recording = False
+                    status_message = f"Class {active_class} target reached ({args.target})! Switch class."
+                    status_color = (0, 255, 100)
+                    status_timestamp = current_time
+                    print(f"\n[DONE] Class {active_class} reached target {args.target}! Switch to next class (keys 1-4).")
+                elif hand_detected and (current_time - last_auto_save_time >= auto_save_interval):
+                    save_landmarks(args.csv, active_class, landmarks)
+                    sample_counts[active_class] = sample_counts.get(active_class, 0) + 1
+                    last_auto_save_time = current_time
+                    cur_cnt = sample_counts[active_class]
+                    status_message = f"Recording C{active_class}: {cur_cnt}/{args.target}"
+                    status_color = (0, 255, 0)
+                    status_timestamp = current_time
+                    if cur_cnt % 25 == 0 or cur_cnt == args.target:
+                        print(f"[{args.csv}] Class {active_class}: {cur_cnt}/{args.target} samples collected")
+
+            # Handle status message timeout (clear after 2.5s if not recording)
+            if not is_recording and (current_time - status_timestamp > 2.5):
+                displayed_msg = ""
+            else:
+                displayed_msg = status_message
 
             # Draw HUD
-            draw_hud(frame, active_class, sample_counts, hand_detected, displayed_msg, status_color)
+            draw_hud(
+                frame=frame,
+                active_class=active_class,
+                sample_counts=sample_counts,
+                target_per_class=args.target,
+                hand_detected=hand_detected,
+                is_recording=is_recording,
+                status_msg=displayed_msg,
+                status_color=status_color,
+                csv_name=os.path.basename(args.csv)
+            )
 
             # Show frame
             cv2.imshow("Hand Gesture Data Collector", frame)
@@ -320,37 +387,49 @@ def main():
             # Switch classes using '1', '2', '3', '4' (and optional '0')
             elif key == ord('1'):
                 active_class = 0
-                status_message = "Switched to Class 0"
+                status_message = f"Switched to Class 0 ({sample_counts.get(0, 0)}/{args.target})"
                 status_color = (0, 255, 200)
                 status_timestamp = time.time()
             elif key == ord('2'):
                 active_class = 1
-                status_message = "Switched to Class 1"
+                status_message = f"Switched to Class 1 ({sample_counts.get(1, 0)}/{args.target})"
                 status_color = (0, 255, 200)
                 status_timestamp = time.time()
             elif key == ord('3'):
                 active_class = 2
-                status_message = "Switched to Class 2"
+                status_message = f"Switched to Class 2 ({sample_counts.get(2, 0)}/{args.target})"
                 status_color = (0, 255, 200)
                 status_timestamp = time.time()
             elif key == ord('4'):
                 active_class = 3
-                status_message = "Switched to Class 3"
+                status_message = f"Switched to Class 3 ({sample_counts.get(3, 0)}/{args.target})"
                 status_color = (0, 255, 200)
                 status_timestamp = time.time()
             elif key == ord('0'):
                 active_class = 0
-                status_message = "Switched to Class 0"
+                status_message = f"Switched to Class 0 ({sample_counts.get(0, 0)}/{args.target})"
                 status_color = (0, 255, 200)
                 status_timestamp = time.time()
 
-            # Save sample when 's' or 'S' is pressed
+            # Toggle Continuous Auto-Record with 'r' or 'R'
+            elif key in [ord('r'), ord('R')]:
+                is_recording = not is_recording
+                if is_recording:
+                    status_message = f"Auto-Record STARTED for Class {active_class} (move hand!)"
+                    status_color = (0, 255, 0)
+                    last_auto_save_time = time.time()
+                else:
+                    status_message = f"Auto-Record PAUSED ({sample_counts.get(active_class, 0)}/{args.target})"
+                    status_color = (0, 255, 255)
+                status_timestamp = time.time()
+
+            # Save single sample when 's' or 'S' is pressed
             elif key in [ord('s'), ord('S')]:
                 if hand_detected:
                     save_landmarks(args.csv, active_class, landmarks)
                     sample_counts[active_class] = sample_counts.get(active_class, 0) + 1
                     count_for_class = sample_counts[active_class]
-                    status_message = f"Saved Class {active_class} (#{count_for_class})!"
+                    status_message = f"Saved Class {active_class} ({count_for_class}/{args.target})"
                     status_color = (0, 255, 0)
                     status_timestamp = time.time()
                     print(f"[SAVED] Class {active_class} sample #{count_for_class} -> {args.csv}")
@@ -363,10 +442,14 @@ def main():
     finally:
         cap.release()
         cv2.destroyAllWindows()
-        print(f"\nCollection complete. Total samples collected: {sum(sample_counts.values())}")
+        print(f"\nCollection session ended. Summary for '{args.csv}':")
+        total_collected = sum(sample_counts.values())
+        print(f"Total samples: {total_collected}")
         for c in range(4):
-            print(f" - Class {c}: {sample_counts.get(c, 0)} samples")
-        print(f"Data saved in: {os.path.abspath(args.csv)}")
+            cnt = sample_counts.get(c, 0)
+            status_str = "COMPLETE" if (args.target > 0 and cnt >= args.target) else f"{cnt}/{args.target}"
+            print(f" - Class {c}: {cnt} samples ({status_str})")
+        print(f"Saved in: {os.path.abspath(args.csv)}")
 
 
 if __name__ == "__main__":
