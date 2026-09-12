@@ -12,10 +12,10 @@ Evaluates:
 Prints 2x2 comparison table and saves final Invariant model to gesture_model.pkl.
 """
 
+import csv
 import os
 import sys
 import numpy as np
-import pandas as pd
 import joblib
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
@@ -30,16 +30,19 @@ def load_dataset(csv_path):
         print(f"Error: Dataset '{csv_path}' not found.")
         sys.exit(1)
 
-    df = pd.read_csv(csv_path)
-    if "class" not in df.columns:
-        # Fallback if label column is first column
-        y = df.iloc[:, 0].values.astype(int)
-        X = df.iloc[:, 1:].values.astype(np.float32)
-    else:
-        y = df["class"].values.astype(int)
-        feature_cols = [c for c in df.columns if c != "class"]
-        X = df[feature_cols].values.astype(np.float32)
+    labels = []
+    features = []
+    with open(csv_path, mode="r", newline="") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+        for row in reader:
+            if not row:
+                continue
+            labels.append(int(float(row[0])))
+            features.append([float(val) for val in row[1:]])
 
+    y = np.array(labels, dtype=np.int64)
+    X = np.array(features, dtype=np.float32)
     return X, y
 
 
